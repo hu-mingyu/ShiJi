@@ -48,9 +48,16 @@ function formatDateTime(value: string) {
 
 function formatBackupDate(value: string | null) {
   if (!value) return '尚未备份'
-  return `上次 ${new Intl.DateTimeFormat('zh-CN', {
+  return new Intl.DateTimeFormat('zh-CN', {
     year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(new Date(value))}`
+  }).format(new Date(value))
+}
+
+function formatBackupDateTime(value: string | null) {
+  if (!value) return '尚未备份'
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).format(new Date(value))
 }
 
 function dateKey(date: Date) {
@@ -999,12 +1006,12 @@ function App() {
           <span className="hamburger" aria-hidden="true"><i /><i /><i /></span>
         </button>
         <div className="brand">ShiJi</div>
-        <button className="backup-button" type="button" onClick={downloadBackup} aria-label={`手动备份，${formatBackupDate(lastBackup)}`} disabled={!recordsLoaded}>
+        <button className="backup-button" type="button" onClick={downloadBackup} aria-label={`上次备份，${formatBackupDate(lastBackup)}`} disabled={!recordsLoaded}>
           <span className="backup-icon" aria-hidden="true">↥</span>
-          <span className="backup-label">手动备份</span>
+          <span className="backup-label">上次备份</span>
           <span className="backup-date">{formatBackupDate(lastBackup)}</span>
         </button>
-        {menuOpen && <div className="menu-popover"><button type="button" onClick={openSharePanel}>分享</button><button type="button" onClick={exportData}>导出数据</button><button type="button" onClick={chooseImportFile}>手动导入</button><p>记录仅保存在此设备</p></div>}
+        {menuOpen && <div className="menu-popover"><button type="button" onClick={openSharePanel}>分享</button><button type="button" onClick={chooseImportFile}>导入数据</button><button className="menu-export-button" type="button" onClick={exportData}><span>导出/备份</span><small>{lastBackup ? `上次 ${formatBackupDateTime(lastBackup)}` : '尚未备份'}</small></button><p>记录仅保存在此设备</p></div>}
         <input ref={importFileRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={importData} aria-label="选择备份文件导入" />
       </header>
 
