@@ -18,3 +18,9 @@ The workflow in `.github/workflows/deploy.yml` builds the app and deploys it to 
 In the repository settings, set **Pages → Build and deployment → Source** to **GitHub Actions**. The deployed URL appears in the workflow run and in the repository's Pages settings.
 
 The web app manifest supports adding ShiJi to an iPhone Home Screen. The current app does not cache pages for offline use, and records remain local to each device/browser unless exported and imported.
+
+## Contributors
+
+- **Mingyu Hu** — Creator, design, development, and testing.
+- **OpenAI Codex** — AI-assisted development, implementation,
+  debugging, and documentation.
