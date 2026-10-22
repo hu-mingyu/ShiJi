@@ -32,6 +32,22 @@ ShiJi 是一款用于记录和回顾日常💩情况的 PWA。可在浏览器中
 2. 从“文件”中选择之前导出的 JSON 备份。
 3. 按页面提示完成导入。
 
+## iOS 原生 App
+
+项目使用 Capacitor 将现有 React 界面打包为 iOS App。网页版本仍通过 Vite 构建并部署到 GitHub Pages；iOS App 使用同一份界面和本地构建资源。
+
+在开发环境中运行：
+
+```bash
+npm install
+npm run cap:sync
+npm run cap:open:ios
+```
+
+需要 macOS 和完整 Xcode 才能在模拟器或 iPhone 上编译、签名和运行。本项目使用 Capacitor 7，最低支持 Xcode 16.0；Xcode 16.2 可以使用。首次签名前，请将 `capacitor.config.ts` 与 Xcode 项目中的 Bundle Identifier 从临时值 `com.example.shiji` 改为你自己的唯一标识。
+
+iOS App 的 JSON 备份和 PNG 图片会通过系统分享面板提供，可选择“存储到文件”。恢复数据时，从 App 菜单选择导入，再从“文件”中选取 JSON 备份。现有 PWA 与原生 App 的本地数据彼此独立；迁移时先在 PWA 导出 JSON，再在 iOS App 导入。
+
 ## 本地开发
 
 需要 Node.js 和 npm。在项目目录运行：

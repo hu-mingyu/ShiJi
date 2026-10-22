@@ -237,6 +237,85 @@
 .record-editor-actions .save-record-button { border-color:var(--accent); color:#fff; background:var(--accent); }
 .app-footer { padding:22px 0 5px; color:#aaa39a; text-align:center; font-size:9px; letter-spacing:.06em; }
 .app-footer span { padding:0 3px; }
+.app-shell.native-app {
+  padding-top: max(8px, env(safe-area-inset-top));
+  padding-bottom: max(30px, env(safe-area-inset-bottom));
+}
+.native-app .topbar { height:48px; }
+.native-app .topbar > .icon-button .hamburger { margin-left:-10.5px; margin-right:auto; }
+.native-app .backup-button { min-width:96px; height:42px; flex-direction:row; align-items:center; justify-content:flex-end; gap:5px; padding:0; }
+.native-app .backup-label { display:none; }
+.native-app .backup-datetime { display:flex; flex-direction:column; align-items:flex-end; color:var(--muted); font-size:8px; line-height:12px; white-space:nowrap; }
+.native-app .backup-icon { width:24px; height:24px; color:var(--accent); fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
+.native-app .calendar-toolbar { gap:3px; }
+.native-app .state-labels { grid-template-columns:48px minmax(0,1fr) 48px; }
+.native-app .state-labels span:first-child,.native-app .state-labels span:last-child { text-align:center; }
+.native-app .state-control { grid-template-columns:48px minmax(0,1fr) 48px; }
+.native-app .state-control .state-endpoint:first-child,.native-app .state-control .state-endpoint:last-child { justify-self:center; }
+.native-app .state-control .state-endpoint { position:relative; z-index:1; background:var(--wash); }
+.native-app .status-slider { left:24px; width:calc(100% - 48px); }
+.native-app .rating-scale { width:auto; justify-content:center; gap:5px; }
+.native-app .rating-scale .stars { min-width:0; flex:none; justify-content:center; }
+.native-app .rating-field { padding-right:5px; padding-left:5px; }
+.native-app .rating-note-row { gap:6px; }
+.native-app .rating-note-row .quick-icon-button { width:38px; }
+.native-app .reset-icon { width:23px; height:23px; fill:none; stroke:#211D19; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.native-app .calendar-period { flex:1 1 0; display:grid; grid-template-columns:22px minmax(0,1fr) 22px auto auto; gap:2px; }
+.native-app .calendar-period > button:not(.return-week-button) { flex:0 0 22px; width:22px; height:30px; padding:0; font-size:20px; }
+.native-app .calendar-period strong { min-width:0; width:100%; font-size:15px; letter-spacing:normal; text-align:center; }
+.native-app .calendar-period .return-week-button { flex:0 0 36px; width:36px; height:27px; font-size:9px; }
+.native-app .calendar-total-count { flex:0 0 auto; font-size:8px; }
+.native-app .view-switcher { flex:0 0 auto; }
+.native-app .view-switcher button { min-width:23px; padding:5px 4px; font-size:10px; }
+.app-shell:not(.native-app) .native-page { display:contents; }
+.native-app {
+  height:100dvh;
+  min-height:100dvh;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  padding-bottom:env(safe-area-inset-bottom);
+}
+.native-app > .topbar { flex:none; }
+.native-app .native-page { display:none; }
+.native-app .native-page.active { min-height:0; width:100%; display:flex; flex:1 1 auto; flex-direction:column; }
+.native-app .native-quick-page { overflow:hidden; }
+.native-app .native-quick-page .composer { flex:none; }
+.native-app .color-well { min-height:122px; justify-content:center; gap:16px; }
+.native-app .native-quick-page .recent-records-section { min-height:0; display:flex; flex:1 1 0; flex-direction:column; overflow-y:auto; margin:12px 0 0; padding-bottom:8px; overscroll-behavior:contain; }
+.native-app .native-calendar-page,.native-app .native-records-page { overflow-y:auto; overscroll-behavior:contain; }
+.native-app .native-calendar-page .calendar-section { flex:none; }
+.native-app .native-calendar-page .statistics-section { flex:none; }
+.native-app .native-records-page .records-section { margin-top:10px; padding-bottom:12px; }
+.native-app .app-footer { display:none; }
+.native-app .note-editor-popover textarea { font-size:16px; }
+.native-tabbar {
+  position:relative;
+  z-index:5;
+  flex:none;
+  width:100vw;
+  display:flex;
+  align-items:center;
+  justify-content:space-around;
+  margin-inline:calc(50% - 50vw);
+  padding:6px 24px 2px;
+  border-top:1px solid var(--line);
+  background:var(--surface);
+  box-shadow:0 -4px 18px #32245408;
+}
+.native-tabbar::after { content:''; position:absolute; top:100%; left:0; right:0; height:env(safe-area-inset-bottom); background:var(--surface); }
+.native-tab {
+  width:56px;
+  height:40px;
+  display:grid;
+  place-items:center;
+  border:0;
+  border-radius:14px;
+  color:var(--muted);
+  background:transparent;
+}
+.native-tab.active { color:var(--accent); background:var(--accent-soft); }
+.native-tab svg { width:23px; height:23px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 @media (max-width:380px) {
   .app-shell { padding-right:12px; padding-left:12px; }
   .composer { padding-right:12px; padding-left:12px; }

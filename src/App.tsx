@@ -1,8 +1,12 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Capacitor } from '@capacitor/core'
+import { Directory, Encoding, Filesystem } from '@capacitor/filesystem'
+import { Share } from '@capacitor/share'
 import { deleteRecord, getRecords, saveRecord, type RecordEntry } from './db'
 import './App.css'
 
 type CalendarMode = 'week' | 'month' | 'year'
+type NativeTab = 'quick' | 'calendar' | 'records'
 
 const paletteColors = [
   '#A96800', '#E0B458', '#805238',
@@ -10,6 +14,56 @@ const paletteColors = [
 ]
 const removedDefaultPresetColor = '#C7822B'
 const weekDays = ['一', '二', '三', '四', '五', '六', '日']
+const iosBackupTimestampKey = 'shiji-ios-last-backup'
+const webBackupTimestampKey = 'shiji-last-backup'
+const backupDirectory = 'ShiJi/backups'
+const dailyBackupInterval = 24 * 60 * 60 * 1000
+
+async function shareFileFromApp(blob: Blob, fileName: string, title: string) {
+  const path = `${Date.now()}-${fileName}`
+  const isText = blob.type.startsWith('text/') || blob.type === 'application/json'
+  let data: string
+  if (isText) {
+    data = await blob.text()
+  } else {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('file read failed'))
+      reader.onerror = () => reject(reader.error ?? new Error('file read failed'))
+      reader.readAsDataURL(blob)
+    })
+    data = dataUrl.slice(dataUrl.indexOf(',') + 1)
+  }
+
+  const { uri } = await Filesystem.writeFile({
+    path,
+    data,
+    directory: Directory.Cache,
+    ...(isText ? { encoding: Encoding.UTF8 } : {}),
+  })
+  try {
+    await Share.share({ files: [uri], title })
+  } finally {
+    await Filesystem.deleteFile({ path, directory: Directory.Cache }).catch(() => undefined)
+  }
+}
+
+function readStoredPresetColors() {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem('shiji-preset-colors') ?? 'null')
+    if (Array.isArray(value)) {
+      return [...new Set(value.filter((color): color is string => typeof color === 'string' && /^#[0-9A-F]{6}$/i.test(color)).map((color) => color.toUpperCase()))]
+    }
+  } catch {
+    // Fall back to the built-in palette if the saved settings are invalid.
+  }
+  return paletteColors
+}
+
+function createBackupJson(records: RecordEntry[], presetColors: string[], backedUpAt: string) {
+  const legacyCustomPresets = presetColors.filter((preset) => !paletteColors.includes(preset))
+  return JSON.stringify({ formatVersion: 3, backedUpAt, records, presetColors, customPresetColors: legacyCustomPresets }, null, 2)
+}
 
 function readPresetColors() {
   try {
@@ -46,6 +100,19 @@ function formatDateTime(value: string) {
   }).format(new Date(value))
 }
 
+function formatNativeRecordTimes(startValue: string, endValue: string) {
+  const start = new Date(startValue)
+  const end = new Date(endValue)
+  const dateFormatter = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit' })
+  const timeFormatter = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+
+  if (start.getTime() === end.getTime()) return `${dateFormatter.format(start)} ${timeFormatter.format(start)}`
+  if (start.toDateString() === end.toDateString()) {
+    return `${dateFormatter.format(start)} ${timeFormatter.format(start)}–${timeFormatter.format(end)}`
+  }
+  return `${dateFormatter.format(start)} ${timeFormatter.format(start)}–${dateFormatter.format(end)} ${timeFormatter.format(end)}`
+}
+
 function formatBackupDate(value: string | null) {
   if (!value) return '尚未备份'
   return new Intl.DateTimeFormat('zh-CN', {
@@ -58,6 +125,16 @@ function formatBackupDateTime(value: string | null) {
   return new Intl.DateTimeFormat('zh-CN', {
     year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }).format(new Date(value))
+}
+
+function formatNativeBackupDateTime(value: string | null) {
+  if (!value) return '尚未备份'
+  const date = new Date(value)
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date)
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? ''
+  return `${part('month')}/${part('day')} ${part('hour')}:${part('minute')}`
 }
 
 function dateKey(date: Date) {
@@ -447,6 +524,16 @@ function NoteIcon() {
   return <svg className="action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 3.5h9l4.5 4.7v12H4.5z" fill="#FFF8ED" stroke="#211D19" strokeWidth="1.7" strokeLinejoin="round"/><path d="M13.5 3.8v4.8h4.2M7.5 12h6" fill="none" stroke="#211D19" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="m12.4 17.8 5.3-6.2 2.1 1.8-5.3 6.2-2.7.7.6-2.5Z" fill="#E0B458" stroke="#211D19" strokeWidth="1.4" strokeLinejoin="round"/></svg>
 }
 
+function ResetIcon() {
+  return <svg className="action-icon reset-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.2 10A8 8 0 1 1 4 14"/><path d="M4.2 4.8V10h5.2"/></svg>
+}
+
+function NativeTabIcon({ tab }: { tab: NativeTab }) {
+  if (tab === 'quick') return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.8h14a1.8 1.8 0 0 1 1.8 1.8v13.1a1.5 1.5 0 0 1-1.5 1.5H4.7a1.5 1.5 0 0 1-1.5-1.5V5.6A1.8 1.8 0 0 1 5 3.8Z"/><path d="M12 8v8M8 12h8"/></svg>
+  if (tab === 'calendar') return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M7.5 3.5v3M16.5 3.5v3M3.5 9h17M8 12.5h.01M12 12.5h.01M16 12.5h.01M8 16h.01M12 16h.01M16 16h.01"/></svg>
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5h12M8.5 12h12M8.5 19h12"/><circle cx="4" cy="5" r=".8"/><circle cx="4" cy="12" r=".8"/><circle cx="4" cy="19" r=".8"/></svg>
+}
+
 function App() {
   const openedAt = useMemo(() => new Date(), [])
   const initialTime = toLocalInputValue(openedAt)
@@ -472,8 +559,10 @@ function App() {
   const [editDraft, setEditDraft] = useState<RecordEntry | null>(null)
   const [recordListMessage, setRecordListMessage] = useState('')
   const [recordsLoaded, setRecordsLoaded] = useState(false)
-  const [lastBackup, setLastBackup] = useState<string | null>(() => localStorage.getItem('shiji-last-backup'))
+  const [lastBackup, setLastBackup] = useState<string | null>(() => localStorage.getItem(Capacitor.isNativePlatform() ? iosBackupTimestampKey : webBackupTimestampKey))
   const [menuOpen, setMenuOpen] = useState(false)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const menuPopoverRef = useRef<HTMLDivElement>(null)
   const importFileRef = useRef<HTMLInputElement>(null)
   const [shareOpen, setShareOpen] = useState(false)
   const [shareMode, setShareMode] = useState<CalendarMode>('month')
@@ -484,8 +573,24 @@ function App() {
   const [elapsedSeconds, setElapsedSeconds] = useState(() => activeStart ? Math.floor((Date.now() - new Date(activeStart).getTime()) / 1000) : 0)
   const [calendarMode, setCalendarMode] = useState<CalendarMode>('month')
   const [calendarDate, setCalendarDate] = useState(() => new Date())
+  const [nativeTab, setNativeTab] = useState<NativeTab>('quick')
+  const [nativeDemoMode, setNativeDemoMode] = useState(false)
   const [showSamples] = useState(import.meta.env.DEV)
+  const backupInProgress = useRef(false)
   const allPresetColors = presetColors
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (!menuButtonRef.current?.contains(target) && !menuPopoverRef.current?.contains(target)) {
+        setMenuOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer)
+  }, [menuOpen])
 
   useEffect(() => {
     getRecords()
@@ -516,22 +621,66 @@ function App() {
     localStorage.setItem('shiji-preset-colors', JSON.stringify(presetColors))
   }, [presetColors])
 
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() || !recordsLoaded) return
+    let active = true
+    let checking = false
+
+    const checkAndCreateDailyBackup = async () => {
+      if (!active || checking || backupInProgress.current || document.visibilityState !== 'visible') return
+      checking = true
+      backupInProgress.current = true
+      try {
+        const previousBackup = localStorage.getItem(iosBackupTimestampKey)
+        const previousTime = previousBackup ? Date.parse(previousBackup) : Number.NaN
+        const elapsed = Date.now() - previousTime
+        if (Number.isFinite(previousTime) && elapsed >= 0 && elapsed < dailyBackupInterval) return
+
+        const backedUpAt = new Date().toISOString()
+        const fileName = `ShiJi-auto-backup-${dateKey(new Date(backedUpAt))}.json`
+        const json = createBackupJson(await getRecords(), readStoredPresetColors(), backedUpAt)
+        await Filesystem.writeFile({
+          path: `${backupDirectory}/${fileName}`,
+          data: json,
+          directory: Directory.Library,
+          encoding: Encoding.UTF8,
+          recursive: true,
+        })
+        localStorage.setItem(iosBackupTimestampKey, backedUpAt)
+        if (active) setLastBackup(backedUpAt)
+      } catch {
+        if (active) setMessage('自动备份未完成，可点右上角“备份”重试。')
+      } finally {
+        checking = false
+        backupInProgress.current = false
+      }
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void checkAndCreateDailyBackup()
+    }
+    void checkAndCreateDailyBackup()
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      active = false
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [recordsLoaded])
+
   const sortedRecords = useMemo(
     () => [...records].sort((a, b) => b.startAt.localeCompare(a.startAt)),
     [records],
   )
   const sampleRecords = useMemo(() => makeSampleRecords(new Date()), [])
   const visibleRecords = useMemo(
-    () => showSamples ? [...records, ...sampleRecords] : records,
-    [records, sampleRecords, showSamples],
+    () => Capacitor.isNativePlatform()
+      ? nativeDemoMode ? sampleRecords : records
+      : showSamples ? [...records, ...sampleRecords] : records,
+    [nativeDemoMode, records, sampleRecords, showSamples],
   )
   const sharePreviewSvg = useMemo(
     () => shareOpen ? buildShareSvg(shareMode, shareDate, visibleRecords, shareIncludeStats) : '',
     [visibleRecords, shareDate, shareIncludeStats, shareMode, shareOpen],
-  )
-  const recordsToDisplay = useMemo(
-    () => showAllRecords ? sortedRecords : [...visibleRecords].sort((a, b) => b.startAt.localeCompare(a.startAt)).slice(0, 5),
-    [showAllRecords, sortedRecords, visibleRecords],
   )
   const recordsByDate = useMemo(() => {
     const grouped = new Map<string, RecordEntry[]>()
@@ -648,30 +797,71 @@ function App() {
     else setHexDraft(color)
   }
 
-  function downloadBackup() {
+  async function downloadBackup() {
     if (!recordsLoaded) {
       setMessage('记录仍在读取，请稍后再备份。')
       return
     }
     const backedUpAt = new Date().toISOString()
-    const legacyCustomPresets = presetColors.filter((preset) => !paletteColors.includes(preset))
-    const blob = new Blob([JSON.stringify({ formatVersion: 3, backedUpAt, records, presetColors, customPresetColors: legacyCustomPresets }, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `ShiJi-backup-${backedUpAt.slice(0, 10)}.json`
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-    localStorage.setItem('shiji-last-backup', backedUpAt)
-    setLastBackup(backedUpAt)
-    setMessage('备份文件已生成')
+    const json = createBackupJson(records, presetColors, backedUpAt)
+    const blob = new Blob([json], { type: 'application/json' })
+    if (Capacitor.isNativePlatform() && backupInProgress.current) {
+      setMessage('备份正在进行，请稍候。')
+      return
+    }
+    try {
+      if (Capacitor.isNativePlatform()) {
+        backupInProgress.current = true
+        const fileName = `ShiJi-backup-${dateKey(new Date(backedUpAt))}.json`
+        await Filesystem.writeFile({
+          path: `${backupDirectory}/${fileName}`,
+          data: createBackupJson(await getRecords(), readStoredPresetColors(), backedUpAt),
+          directory: Directory.Library,
+          encoding: Encoding.UTF8,
+          recursive: true,
+        })
+        localStorage.setItem(iosBackupTimestampKey, backedUpAt)
+        setLastBackup(backedUpAt)
+        setMessage('已备份到 ShiJi App 内。需要迁移或卸载前，请从菜单导出 JSON。')
+      } else {
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `ShiJi-backup-${dateKey(new Date(backedUpAt))}.json`
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+        setMessage('备份文件已生成')
+        localStorage.setItem(webBackupTimestampKey, backedUpAt)
+        setLastBackup(backedUpAt)
+      }
+    } catch {
+      setMessage('备份导出失败，请稍后重试。')
+    } finally {
+      backupInProgress.current = false
+    }
   }
 
-  function exportData() {
+  async function exportData() {
     setMenuOpen(false)
-    downloadBackup()
+    if (!Capacitor.isNativePlatform()) {
+      void downloadBackup()
+      return
+    }
+    if (!recordsLoaded) {
+      setMessage('记录仍在读取，请稍后再导出。')
+      return
+    }
+    const backedUpAt = new Date().toISOString()
+    const fileName = `ShiJi-backup-${dateKey(new Date(backedUpAt))}.json`
+    try {
+      const blob = new Blob([createBackupJson(await getRecords(), readStoredPresetColors(), backedUpAt)], { type: 'application/json' })
+      await shareFileFromApp(blob, fileName, 'ShiJi 数据导出')
+      setMessage('请在分享面板中选择“存储到文件”，可保存到本机或 iCloud Drive。')
+    } catch {
+      setMessage('JSON 导出失败，请稍后重试。')
+    }
   }
 
   function chooseImportFile() {
@@ -707,7 +897,9 @@ function App() {
       URL.revokeObjectURL(svgUrl)
       const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error('png conversion failed')), 'image/png'))
       const file = new File([blob], `ShiJi-${shareMode}-${dateKey(shareDate)}.png`, { type: 'image/png' })
-      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+      if (Capacitor.isNativePlatform()) {
+        await shareFileFromApp(blob, file.name, `ShiJi ${periodTitle(shareMode, shareDate)}`)
+      } else if (navigator.share && navigator.canShare?.({ files: [file] })) {
         await navigator.share({ files: [file], title: `ShiJi ${periodTitle(shareMode, shareDate)}` })
       } else {
         const url = URL.createObjectURL(blob)
@@ -870,6 +1062,16 @@ function App() {
     }
   }
 
+  function resetEntryFields() {
+    setColor('')
+    setStatus(null)
+    setRating(null)
+    setNote('')
+    setNoteEditorOpen(false)
+    setEditingHex(false)
+    setHexDraft('')
+  }
+
   function updateSelectedDate(nextDate: string) {
     if (!nextDate) return
     setSelectedDate(nextDate)
@@ -999,19 +1201,67 @@ function App() {
     )
   }
 
+  function renderRecordsSection(mode: 'recent' | 'all' | 'pwa') {
+    const showingAll = mode === 'all' || (mode === 'pwa' && showAllRecords)
+    const sectionRecords = showingAll
+      ? Capacitor.isNativePlatform() ? [...visibleRecords].sort((a, b) => b.startAt.localeCompare(a.startAt)) : sortedRecords
+      : [...visibleRecords].sort((a, b) => b.startAt.localeCompare(a.startAt)).slice(0, 5)
+    const title = mode === 'pwa' ? (showAllRecords ? '全部记录' : '最近记录') : showingAll ? '全部记录' : '最近记录'
+    const count = showingAll ? Capacitor.isNativePlatform() ? visibleRecords.length : records.length : visibleRecords.length
+
+    return (
+      <section className={`records-section${mode === 'recent' ? ' recent-records-section' : ''}`} id={mode === 'recent' ? 'recent-records' : 'records'} aria-label={title}>
+        <div className="records-heading"><h2>{title}</h2><div className="records-heading-actions">
+          {mode === 'pwa' && <button className="records-back-button" type="button" onClick={() => { setShowAllRecords((current) => !current); setRecordEditMode(false); setEditingRecordId(null); setEditDraft(null) }}>{showAllRecords ? '最近记录' : '全部记录'}</button>}
+          <button className="records-back-button" type="button" onClick={() => { setRecordEditMode((current) => !current); setEditingRecordId(null); setEditDraft(null) }}>{recordEditMode ? '完成' : '编辑'}</button>
+          <span className="record-count">{count} 条</span>
+        </div></div>
+        {recordListMessage && <p className="record-list-message" role="status">{recordListMessage}</p>}
+        {sectionRecords.length === 0 ? (
+          <div className="empty-state"><span className="empty-mark">✳</span><p>还没有记录</p><span>完成一次记录后，会显示在这里</span></div>
+        ) : (
+          <div className="record-list">{sectionRecords.map((record) => (
+            <article className={`record-item${record.id.startsWith('sample-') ? ' sample-item' : ''}`} key={record.id}>
+              <div className="record-summary">
+                <PoopIcon color={record.color} size={22} />
+                <div className="record-main"><div className="record-times">{Capacitor.isNativePlatform() ? <time>{formatNativeRecordTimes(record.startAt, record.endAt)}</time> : <><time>{formatDateTime(record.startAt)}</time><span>—</span><time>{formatDateTime(record.endAt)}</time></>}</div>{record.note && <p className="record-note">{record.note}</p>}</div>
+                <div className="record-meta">{record.status !== null && <span>{record.status.toFixed(2)}</span>}{record.rating !== null && <span className="record-stars">{'★'.repeat(record.rating)}</span>}</div>
+                {recordEditMode && !record.id.startsWith('sample-') && <div className="record-actions"><button type="button" onClick={() => beginRecordEdit(record)}>修改</button><button type="button" className="delete-record-button" onClick={() => void removeRecord(record)}>删除</button></div>}
+              </div>
+              {editingRecordId === record.id && editDraft && <div className="record-editor">
+                <label>开始时间<input type="datetime-local" value={editDraft.startAt} onChange={(event) => setEditDraft({ ...editDraft, startAt: event.target.value })} /></label>
+                <label>结束时间<input type="datetime-local" value={editDraft.endAt} onChange={(event) => setEditDraft({ ...editDraft, endAt: event.target.value })} /></label>
+                <label>颜色 Hex<input type="text" value={editDraft.color} placeholder="留空表示无颜色" onChange={(event) => setEditDraft({ ...editDraft, color: event.target.value.toUpperCase() })} /></label>
+                <label>状态（0–1）<input type="number" min="0" max="1" step="0.01" value={editDraft.status ?? ''} onChange={(event) => setEditDraft({ ...editDraft, status: event.target.value === '' ? null : Number(event.target.value) })} /></label>
+                <label>评价<select value={editDraft.rating ?? ''} onChange={(event) => setEditDraft({ ...editDraft, rating: event.target.value === '' ? null : Number(event.target.value) })}><option value="">未评价</option>{[1, 2, 3, 4, 5].map((star) => <option key={star} value={star}>{star} 星</option>)}</select></label>
+                <label className="record-editor-note">备注<textarea rows={2} value={editDraft.note} onChange={(event) => setEditDraft({ ...editDraft, note: event.target.value })} /></label>
+                <div className="record-editor-actions"><button type="button" className="save-record-button" onClick={() => void saveRecordEdit()}>保存修改</button><button type="button" onClick={() => { setEditingRecordId(null); setEditDraft(null) }}>取消</button></div>
+              </div>}
+            </article>
+          ))}</div>
+        )}
+      </section>
+    )
+  }
+
   return (
-    <main className="app-shell">
+    <main className={`app-shell${Capacitor.isNativePlatform() ? ' native-app' : ''}`}>
       <header className="topbar">
-        <button className="icon-button" type="button" aria-label="打开菜单" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>
+        <button ref={menuButtonRef} className="icon-button" type="button" aria-label="打开菜单" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>
           <span className="hamburger" aria-hidden="true"><i /><i /><i /></span>
         </button>
         <div className="brand">ShiJi</div>
-        <button className="backup-button" type="button" onClick={downloadBackup} aria-label={`上次备份，${formatBackupDate(lastBackup)}`} disabled={!recordsLoaded}>
-          <span className="backup-icon" aria-hidden="true">↥</span>
-          <span className="backup-label">上次备份</span>
-          <span className="backup-date">{formatBackupDate(lastBackup)}</span>
+        <button className="backup-button" type="button" onClick={downloadBackup} aria-label={`上次备份，${Capacitor.isNativePlatform() ? formatNativeBackupDateTime(lastBackup) : formatBackupDate(lastBackup)}`} disabled={!recordsLoaded}>
+          {Capacitor.isNativePlatform() ? <>
+            <span className="backup-datetime"><span>{formatNativeBackupDateTime(lastBackup).split(' ')[0]}</span><span>{formatNativeBackupDateTime(lastBackup).split(' ')[1] ?? ''}</span></span>
+            <svg className="backup-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0L7.5 7.5M12 3l4.5 4.5M4.5 15.5v4h15v-4" /></svg>
+          </> : <>
+            <span className="backup-icon" aria-hidden="true">↥</span>
+            <span className="backup-label">上次备份</span>
+            <span className="backup-date">{formatBackupDate(lastBackup)}</span>
+          </>}
         </button>
-        {menuOpen && <div className="menu-popover"><button type="button" onClick={openSharePanel}>分享</button><button type="button" onClick={chooseImportFile}>导入数据</button><button className="menu-export-button" type="button" onClick={exportData}><span>导出/备份</span><small>{lastBackup ? `上次 ${formatBackupDateTime(lastBackup)}` : '尚未备份'}</small></button><p>记录仅保存在此设备</p></div>}
+        {menuOpen && <div ref={menuPopoverRef} className="menu-popover">{Capacitor.isNativePlatform() && <button type="button" aria-pressed={nativeDemoMode} onClick={() => { setNativeDemoMode((enabled) => !enabled); setMenuOpen(false); setRecordEditMode(false); setEditingRecordId(null); setEditDraft(null) }}>{nativeDemoMode ? '退出演示模式' : '演示模式'}</button>}<button type="button" onClick={openSharePanel}>分享</button><button type="button" onClick={chooseImportFile}>{Capacitor.isNativePlatform() ? '导入 JSON' : '导入数据'}</button><button className="menu-export-button" type="button" onClick={exportData}><span>{Capacitor.isNativePlatform() ? '导出 JSON' : '导出/备份'}</span><small>{Capacitor.isNativePlatform() ? '可保存到本机或 iCloud Drive' : lastBackup ? `上次 ${formatBackupDateTime(lastBackup)}` : '尚未备份'}</small></button><p>记录仅保存在此设备</p></div>}
         <input ref={importFileRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={importData} aria-label="选择备份文件导入" />
       </header>
 
@@ -1029,6 +1279,7 @@ function App() {
         </section>
       </div>}
 
+      <div className={`native-page native-quick-page${nativeTab === 'quick' ? ' active' : ''}`}>
       <section className="composer" aria-label="快速记录">
         <div className="attributes">
           <div className="color-field">
@@ -1067,6 +1318,7 @@ function App() {
             </div>
             <button className={`quick-icon-button${note.includes('#吃辣了') ? ' active' : ''}`} type="button" aria-label="切换吃辣了标签" aria-pressed={note.includes('#吃辣了')} onClick={() => setNote((current) => current.includes('#吃辣了') ? current.replace(/\s*#吃辣了/, '').trim() : `${current}${current.trim() ? ' ' : ''}#吃辣了`)}><PepperIcon /></button>
             <button className={`quick-icon-button${note.trim() && !note.trim().startsWith('#吃辣了') ? ' active' : ''}`} type="button" aria-label="编辑备注" aria-expanded={noteEditorOpen} onClick={() => setNoteEditorOpen((open) => !open)}><NoteIcon /></button>
+            {Capacitor.isNativePlatform() && <button className="quick-icon-button reset-entry-button" type="button" aria-label="重置颜色、状态、评分、吃辣标签和备注" onClick={resetEntryFields}><ResetIcon /></button>}
             {noteEditorOpen && <div className="note-editor-popover"><textarea autoFocus aria-label="备注" value={note.replace(/\s*#吃辣了/, '').trim()} onChange={(event) => setNote((current) => `${event.target.value}${current.includes('#吃辣了') ? `${event.target.value.trim() ? ' ' : ''}#吃辣了` : ''}`)} rows={3} placeholder="写点什么…" /><button type="button" onClick={() => setNoteEditorOpen(false)}>完成</button></div>}
           </div>
         </div>
@@ -1093,6 +1345,10 @@ function App() {
         {message && <p className="feedback" role="status" aria-live="polite">{message}</p>}
       </section>
 
+      {Capacitor.isNativePlatform() && renderRecordsSection('recent')}
+      </div>
+
+      <div className={`native-page native-calendar-page${nativeTab === 'calendar' ? ' active' : ''}`}>
       <section className="calendar-section" id="calendar" aria-label="日历">
         <div className="calendar-toolbar">
           <div className="calendar-period"><button type="button" aria-label="上一个周期" onClick={() => moveCalendar(-1)}>‹</button><strong>{calendarTitle}</strong><button type="button" aria-label="下一个周期" onClick={() => moveCalendar(1)}>›</button>{calendarMode !== 'week' && <button className="return-week-button" type="button" onClick={() => setCalendarDate(new Date())} disabled={calendarMode === 'month' ? isCurrentMonth : isCurrentYear}>{calendarMode === 'month' ? '本月' : '本年'}</button>}{calendarMode === 'week' && <button className="return-week-button" type="button" onClick={() => setCalendarDate(new Date())} disabled={isCurrentWeek}>本周</button>}<span className="calendar-total-count">共 {visibleRecords.length} 条</span></div>
@@ -1131,35 +1387,18 @@ function App() {
           })}</span><span>顺畅</span></div> : <strong className="stat-unset">暂无评价数据</strong>}</article>
         </div>}
       </section>
+      </div>
 
-      <section className="records-section" id="records" aria-label={showAllRecords ? '全部记录' : '最近记录'}>
-        <div className="records-heading"><h2>{showAllRecords ? '全部记录' : '最近记录'}</h2><div className="records-heading-actions"><button className="records-back-button" type="button" onClick={() => { setShowAllRecords((current) => !current); setRecordEditMode(false); setEditingRecordId(null); setEditDraft(null) }}>{showAllRecords ? '最近记录' : '全部记录'}</button><button className="records-back-button" type="button" onClick={() => { setRecordEditMode((current) => !current); setEditingRecordId(null); setEditDraft(null) }}>{recordEditMode ? '完成' : '编辑'}</button><span className="record-count">{showAllRecords ? records.length : visibleRecords.length} 条</span></div></div>
-        {recordListMessage && <p className="record-list-message" role="status">{recordListMessage}</p>}
-        {recordsToDisplay.length === 0 ? (
-          <div className="empty-state"><span className="empty-mark">✳</span><p>还没有记录</p><span>完成一次记录后，会显示在这里</span></div>
-        ) : (
-          <div className="record-list">{recordsToDisplay.map((record) => (
-            <article className={`record-item${record.id.startsWith('sample-') ? ' sample-item' : ''}`} key={record.id}>
-              <div className="record-summary">
-                <PoopIcon color={record.color} size={22} />
-                <div className="record-main"><div className="record-times"><time>{formatDateTime(record.startAt)}</time><span>—</span><time>{formatDateTime(record.endAt)}</time></div>{record.note && <p className="record-note">{record.note}</p>}</div>
-                <div className="record-meta">{record.status !== null && <span>{record.status.toFixed(2)}</span>}{record.rating !== null && <span className="record-stars">{'★'.repeat(record.rating)}</span>}</div>
-                {recordEditMode && !record.id.startsWith('sample-') && <div className="record-actions"><button type="button" onClick={() => beginRecordEdit(record)}>修改</button><button type="button" className="delete-record-button" onClick={() => void removeRecord(record)}>删除</button></div>}
-              </div>
-              {editingRecordId === record.id && editDraft && <div className="record-editor">
-                <label>开始时间<input type="datetime-local" value={editDraft.startAt} onChange={(event) => setEditDraft({ ...editDraft, startAt: event.target.value })} /></label>
-                <label>结束时间<input type="datetime-local" value={editDraft.endAt} onChange={(event) => setEditDraft({ ...editDraft, endAt: event.target.value })} /></label>
-                <label>颜色 Hex<input type="text" value={editDraft.color} placeholder="留空表示无颜色" onChange={(event) => setEditDraft({ ...editDraft, color: event.target.value.toUpperCase() })} /></label>
-                <label>状态（0–1）<input type="number" min="0" max="1" step="0.01" value={editDraft.status ?? ''} onChange={(event) => setEditDraft({ ...editDraft, status: event.target.value === '' ? null : Number(event.target.value) })} /></label>
-                <label>评价<select value={editDraft.rating ?? ''} onChange={(event) => setEditDraft({ ...editDraft, rating: event.target.value === '' ? null : Number(event.target.value) })}><option value="">未评价</option>{[1, 2, 3, 4, 5].map((star) => <option key={star} value={star}>{star} 星</option>)}</select></label>
-                <label className="record-editor-note">备注<textarea rows={2} value={editDraft.note} onChange={(event) => setEditDraft({ ...editDraft, note: event.target.value })} /></label>
-                <div className="record-editor-actions"><button type="button" className="save-record-button" onClick={() => void saveRecordEdit()}>保存修改</button><button type="button" onClick={() => { setEditingRecordId(null); setEditDraft(null) }}>取消</button></div>
-              </div>}
-            </article>
-          ))}</div>
-        )}
-      </section>
+      <div className={`native-page native-records-page${nativeTab === 'records' ? ' active' : ''}`}>
+      {Capacitor.isNativePlatform() ? renderRecordsSection('all') : renderRecordsSection('pwa')}
+      </div>
       <footer className="app-footer">ShiJi <span>·</span> 个人记录</footer>
+
+      {Capacitor.isNativePlatform() && <nav className="native-tabbar" role="tablist" aria-label="主导航">
+        {([['quick', '快速记录'], ['calendar', '查看日历'], ['records', '全部记录']] as const).map(([tab, label]) => <button key={tab} type="button" role="tab" className={`native-tab${nativeTab === tab ? ' active' : ''}`} aria-label={label} aria-selected={nativeTab === tab} onClick={() => setNativeTab(tab)}>
+          <NativeTabIcon tab={tab} />
+        </button>)}
+      </nav>}
     </main>
   )
 }
