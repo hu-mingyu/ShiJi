@@ -60,10 +60,7 @@ npm run dev
 ## 贡献
 
 本项目在OpenAI Codex的协助下完成。
-
-欢迎提交 Issue 或 Pull Request。提交前请运行 `npm run build`，并简要说明改动内容。
-
-## Contributors
-
 - **Mingyu Hu** — Creator, design, development, and testing.
 - **OpenAI Codex** — AI-assisted development, implementation, debugging, and documentation.
+
+欢迎提交 Issue 或 Pull Request。提交前请运行 `npm run build`，并简要说明改动内容。
