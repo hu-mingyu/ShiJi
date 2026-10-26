@@ -190,7 +190,7 @@ function averageHex(records: RecordEntry[]) {
   return `#${[1, 3, 5].map((index) => Math.round(colors.reduce((sum, value) => sum + parseInt(value.slice(index, index + 2), 16), 0) / colors.length).toString(16).padStart(2, '0')).join('')}`.toUpperCase()
 }
 
-function buildShareSvg(mode: CalendarMode, date: Date, records: RecordEntry[], includeStats: boolean, nativeAppLayout = false) {
+function buildShareSvg(mode: CalendarMode, date: Date, records: RecordEntry[], includeStats: boolean) {
   const { start, end } = periodBounds(mode, date)
   const entries = records.filter((record) => {
     const time = new Date(record.startAt).getTime()
@@ -251,7 +251,7 @@ function buildShareSvg(mode: CalendarMode, date: Date, records: RecordEntry[], i
   } else if (mode === 'week') {
     const gridX = cardX + 52
     const gridY = headerHeight + 74
-    const gridW = cardWidth - (nativeAppLayout ? 107 : 66)
+    const gridW = cardWidth - 107
     const dayW = gridW / 7
     const hourH = 32
     const axisW = 55
@@ -679,7 +679,7 @@ function App() {
     [nativeDemoMode, records, sampleRecords, showSamples],
   )
   const sharePreviewSvg = useMemo(
-    () => shareOpen ? buildShareSvg(shareMode, shareDate, visibleRecords, shareIncludeStats, Capacitor.isNativePlatform()) : '',
+    () => shareOpen ? buildShareSvg(shareMode, shareDate, visibleRecords, shareIncludeStats) : '',
     [visibleRecords, shareDate, shareIncludeStats, shareMode, shareOpen],
   )
   const recordsByDate = useMemo(() => {
@@ -879,7 +879,7 @@ function App() {
   async function generateShareImage() {
     setSharing(true)
     try {
-      const svg = buildShareSvg(shareMode, shareDate, visibleRecords, shareIncludeStats, Capacitor.isNativePlatform())
+      const svg = buildShareSvg(shareMode, shareDate, visibleRecords, shareIncludeStats)
       const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
       const svgUrl = URL.createObjectURL(svgBlob)
       const image = new Image()
