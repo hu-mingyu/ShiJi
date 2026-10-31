@@ -565,6 +565,9 @@ function App() {
   const menuPopoverRef = useRef<HTMLDivElement>(null)
   const importFileRef = useRef<HTMLInputElement>(null)
   const [shareOpen, setShareOpen] = useState(false)
+  const [pendingImport, setPendingImport] = useState<{ records: RecordEntry[]; presetColors: string[] | null } | null>(null)
+  const [confirmOverwrite, setConfirmOverwrite] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [shareMode, setShareMode] = useState<CalendarMode>('month')
   const [shareDate, setShareDate] = useState(() => new Date())
   const [shareIncludeStats, setShareIncludeStats] = useState(true)
@@ -797,6 +800,28 @@ function App() {
     else setHexDraft(color)
   }
 
+  async function copyCurrentHex() {
+    const value = color || hslToHex(hue, lightness)
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value)
+      } else {
+        const input = document.createElement('textarea')
+        input.value = value
+        input.style.position = 'fixed'
+        input.style.opacity = '0'
+        document.body.appendChild(input)
+        input.select()
+        const copied = document.execCommand('copy')
+        input.remove()
+        if (!copied) throw new Error('Clipboard unavailable')
+      }
+      setMessage(`已复制 ${value}`)
+    } catch {
+      setMessage('复制失败，请检查剪贴板权限。')
+    }
+  }
+
   async function downloadBackup() {
     if (!recordsLoaded) {
       setMessage('记录仍在读取，请稍后再备份。')
@@ -954,13 +979,34 @@ function App() {
           && typeof item.note === 'string'
       }
       if (!imported.every(isRecord)) throw new Error('invalid record')
+      if (Capacitor.isNativePlatform()) {
+        setPendingImport({ records: imported as RecordEntry[], presetColors: importedPresetColors })
+        return
+      }
       if (imported.length && !window.confirm(`将导入 ${imported.length} 条记录；相同 ID 的记录会被导入文件覆盖。继续吗？`)) return
-      for (const record of imported) await saveRecord(record)
-      setRecords(await getRecords())
-      if (importedPresetColors) setPresetColors(importedPresetColors)
-      setMessage(`已导入 ${imported.length} 条记录`)
+      await applyImport(imported as RecordEntry[], importedPresetColors, 'overwrite')
     } catch {
       setMessage('导入失败：请选择 ShiJi 导出的有效 JSON 备份文件。')
+    }
+  }
+
+  async function applyImport(imported: RecordEntry[], importedPresetColors: string[] | null, mode: 'merge' | 'overwrite') {
+    setImporting(true)
+    try {
+      const existingRecords = mode === 'merge' ? await getRecords() : []
+      const existingIds = new Set(existingRecords.map((record) => record.id))
+      const recordsToImport = mode === 'merge' ? imported.filter((record) => !existingIds.has(record.id)) : imported
+      const conflicts = imported.length - recordsToImport.length
+      for (const record of recordsToImport) await saveRecord(record)
+      setRecords(await getRecords())
+      if (importedPresetColors) setPresetColors(importedPresetColors)
+      setMessage(`已导入 ${recordsToImport.length} 条记录${conflicts ? `，保留本机 ${conflicts} 条同 ID 记录` : ''}`)
+      setPendingImport(null)
+      setConfirmOverwrite(false)
+    } catch {
+      setMessage('导入失败：请选择 ShiJi 导出的有效 JSON 备份文件。')
+    } finally {
+      setImporting(false)
     }
   }
 
@@ -1026,8 +1072,9 @@ function App() {
 
   async function saveRecordEdit() {
     if (!editDraft) return
-    if (editDraft.color && !/^#[0-9A-F]{6}$/i.test(editDraft.color)) {
-      setRecordListMessage('颜色请使用 #RRGGBB 格式，或留空。')
+    const colorDigits = editDraft.color.trim().replace(/^#/, '').toUpperCase()
+    if (colorDigits && !/^[0-9A-F]{6}$/.test(colorDigits)) {
+      setRecordListMessage('颜色请输入 6 位 Hex 代码，例如 A96800；也可以留空。')
       return
     }
     try {
@@ -1035,7 +1082,7 @@ function App() {
         ...editDraft,
         startAt: new Date(editDraft.startAt).toISOString(),
         endAt: new Date(editDraft.endAt).toISOString(),
-        color: editDraft.color.toUpperCase(),
+        color: colorDigits ? `#${colorDigits}` : '',
       }
       await saveRecord(updatedRecord)
       setRecords((current) => current.map((record) => record.id === updatedRecord.id ? updatedRecord : record))
@@ -1231,7 +1278,7 @@ function App() {
               {editingRecordId === record.id && editDraft && <div className="record-editor">
                 <label>开始时间<input type="datetime-local" value={editDraft.startAt} onChange={(event) => setEditDraft({ ...editDraft, startAt: event.target.value })} /></label>
                 <label>结束时间<input type="datetime-local" value={editDraft.endAt} onChange={(event) => setEditDraft({ ...editDraft, endAt: event.target.value })} /></label>
-                <label>颜色 Hex<input type="text" value={editDraft.color} placeholder="留空表示无颜色" onChange={(event) => setEditDraft({ ...editDraft, color: event.target.value.toUpperCase() })} /></label>
+                <label>颜色 Hex<input type="text" value={editDraft.color.replace(/^#/, '')} onChange={(event) => setEditDraft({ ...editDraft, color: event.target.value.toUpperCase() })} /></label>
                 <label>状态（0–1）<input type="number" min="0" max="1" step="0.01" value={editDraft.status ?? ''} onChange={(event) => setEditDraft({ ...editDraft, status: event.target.value === '' ? null : Number(event.target.value) })} /></label>
                 <label>评价<select value={editDraft.rating ?? ''} onChange={(event) => setEditDraft({ ...editDraft, rating: event.target.value === '' ? null : Number(event.target.value) })}><option value="">未评价</option>{[1, 2, 3, 4, 5].map((star) => <option key={star} value={star}>{star} 星</option>)}</select></label>
                 <label className="record-editor-note">备注<textarea rows={2} value={editDraft.note} onChange={(event) => setEditDraft({ ...editDraft, note: event.target.value })} /></label>
@@ -1261,7 +1308,7 @@ function App() {
             <span className="backup-date">{formatBackupDate(lastBackup)}</span>
           </>}
         </button>
-        {menuOpen && <div ref={menuPopoverRef} className="menu-popover">{Capacitor.isNativePlatform() && <button type="button" aria-pressed={nativeDemoMode} onClick={() => { setNativeDemoMode((enabled) => !enabled); setMenuOpen(false); setRecordEditMode(false); setEditingRecordId(null); setEditDraft(null) }}>{nativeDemoMode ? '退出演示模式' : '演示模式'}</button>}<button type="button" onClick={openSharePanel}>分享</button><button type="button" onClick={chooseImportFile}>{Capacitor.isNativePlatform() ? '导入 JSON' : '导入数据'}</button><button className="menu-export-button" type="button" onClick={exportData}><span>{Capacitor.isNativePlatform() ? '导出 JSON' : '导出/备份'}</span><small>{Capacitor.isNativePlatform() ? '可保存到本机或 iCloud Drive' : lastBackup ? `上次 ${formatBackupDateTime(lastBackup)}` : '尚未备份'}</small></button><p>记录仅保存在此设备</p></div>}
+        {menuOpen && <div ref={menuPopoverRef} className="menu-popover">{Capacitor.isNativePlatform() && <button type="button" aria-pressed={nativeDemoMode} onClick={() => { setNativeDemoMode((enabled) => !enabled); setMenuOpen(false); setRecordEditMode(false); setEditingRecordId(null); setEditDraft(null) }}>{nativeDemoMode ? '退出演示模式' : '演示模式'}</button>}<button type="button" onClick={openSharePanel}>分享</button><button type="button" onClick={chooseImportFile}>{Capacitor.isNativePlatform() ? '导入 JSON' : '导入数据'}</button><button className="menu-export-button" type="button" onClick={exportData}><span>{Capacitor.isNativePlatform() ? '导出 JSON' : '导出/备份'}</span><small>{Capacitor.isNativePlatform() ? '可保存到本机或 iCloud Drive' : lastBackup ? `上次 ${formatBackupDateTime(lastBackup)}` : '尚未备份'}</small></button></div>}
         <input ref={importFileRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={importData} aria-label="选择备份文件导入" />
       </header>
 
@@ -1278,6 +1325,8 @@ function App() {
           <div className="share-dialog-actions"><button type="button" className="share-cancel-button" onClick={() => setShareOpen(false)} disabled={sharing}>取消</button><button type="button" className="share-generate-button" onClick={generateShareImage} disabled={sharing || !recordsLoaded}>{sharing ? '正在生成…' : '生成图片'}</button></div>
         </section>
       </div>}
+      {pendingImport && <div className="share-overlay" role="presentation"><section className="share-dialog import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-title"><div className="share-dialog-heading"><h2 id="import-title">导入选项</h2><button type="button" aria-label="取消导入" disabled={importing} onClick={() => { setPendingImport(null); setConfirmOverwrite(false) }}>×</button></div><div className="import-stats"><div><span>已加载</span><strong>{records.length}</strong></div><div><span>导入文件</span><strong>{pendingImport.records.length}</strong></div><div><span>重复</span><strong>{new Set(pendingImport.records.map((item) => item.id).filter((id) => records.some((record) => record.id === id))).size}</strong></div></div><div className="import-choice-list"><button type="button" className="import-choice active" disabled={importing} onClick={() => void applyImport(pendingImport.records, pendingImport.presetColors, 'merge')}>合并</button><button type="button" className="import-choice" disabled={importing} onClick={() => setConfirmOverwrite(true)}>覆盖</button></div><div className="share-dialog-actions"><button type="button" disabled={importing} onClick={() => { setPendingImport(null); setConfirmOverwrite(false) }}>取消</button></div></section></div>}
+      {pendingImport && confirmOverwrite && <div className="share-overlay import-warning-overlay" role="presentation"><section className="share-dialog" role="alertdialog" aria-modal="true" aria-labelledby="overwrite-title"><div className="share-dialog-heading"><h2 id="overwrite-title">确认覆盖记录</h2><button type="button" aria-label="返回导入选项" disabled={importing} onClick={() => setConfirmOverwrite(false)}>×</button></div><p className="import-warning-text">覆盖后，与导入文件中 ID 相同的现有记录将被替换，原记录无法找回。确定继续吗？</p><div className="share-dialog-actions"><button type="button" disabled={importing} onClick={() => setConfirmOverwrite(false)}>取消</button><button type="button" className="share-generate-button" disabled={importing} onClick={() => void applyImport(pendingImport.records, pendingImport.presetColors, 'overwrite')}>{importing ? '正在导入…' : '确认覆盖'}</button></div></section></div>}
 
       <div className={`native-page native-quick-page${nativeTab === 'quick' ? ' active' : ''}`}>
       <section className="composer" aria-label="快速记录">
@@ -1293,7 +1342,10 @@ function App() {
                   {editingHex ? (
                     <input autoFocus className="hex-editor" aria-label="输入 Hex 颜色代码" value={hexDraft} placeholder="#A96800" onChange={(event) => setHexDraft(event.target.value.toUpperCase())} onBlur={commitHex} onKeyDown={(event) => { if (event.key === 'Enter') commitHex() }} />
                   ) : (
-                    <button className={`hex-value${color ? '' : ' empty'}`} type="button" aria-label="点击输入 Hex 颜色代码" onClick={() => { setHexDraft(color); setEditingHex(true) }}>{color || 'HEX'}</button>
+                    <>
+                      <button className="hex-edit-button" type="button" aria-label="编辑 Hex 颜色代码" onClick={() => { setHexDraft(color); setEditingHex(true) }}>✎</button>
+                      <button className={`hex-value${color ? '' : ' empty'}`} type="button" aria-label="复制 Hex 颜色代码" title="点击复制 Hex" onClick={() => void copyCurrentHex()}>{color || 'HEX'}</button>
+                    </>
                   )}
                 </div>
               </div>
